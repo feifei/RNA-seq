@@ -6,6 +6,7 @@ library(goseq)
 library(ggplot2)
 library(reshape2)
 library(pheatmap)
+library(org.Hs.eg.db)
 
 
 qlf_dictionary <- function(fit, my.contrasts, ...) {
@@ -160,7 +161,7 @@ go_up_down <- function(GOmap, up_down, genes, lengthData, contrast, extra_tag = 
   }
 }
 
-go_analysis <- function(y, GOmap, isDE, dt, contrast, ...) {
+go_analysis <- function(y, GOmap, isDE, dt, contrast, tag = "", ...) {
   ########################
   # Go enrichment analysis with goseq
   ########################
@@ -196,3 +197,44 @@ go_analysis <- function(y, GOmap, isDE, dt, contrast, ...) {
   }
 }
 
+go_kegg_analysis <- function(y, isDE, contrast, tag="", ...) {
+  ########################
+  # Go and KEGG enrichment analysis with limma
+  ########################
+  cat("\n\n\n\n### GO & KEGG analysis \n\n")
+  
+  go <- goana(y$genes$entrezgene[isDE], species = "Hs")
+  go <- go[order(go$P.DE), ]
+  
+  top_go <- topGO(go)
+  top_go$P.DE <- format(top_go$P.DE, nsmall=1, digits = 3)
+  colSize = ncol(top_go)
+  # Workaround in printing table
+  print(
+    htmltools::tagList(
+      datatable(top_go, options = list(scrollX = TRUE)) %>%
+        formatStyle(columns = c(1:colSize), fontSize = '80%')
+    )
+  )
+  
+  #go <- format(go, digits=2, nsmall=1)
+  write.csv(go, file=paste(directory, name, "_sig_results", tag, ".go.", contrast, ".csv", sep=""))
+  
+  
+  kegg <- kegga(y$genes$entrezgene[isDE], species = "Hs")
+  kegg <- kegg[order(kegg$P.DE), ]
+  
+  top_kegg <- topKEGG(kegg)
+  top_kegg$P.DE <- format(top_kegg$P.DE, nsmall=1, digits = 3)
+  colSize = ncol(top_kegg)
+  print(
+    htmltools::tagList(
+      datatable(top_kegg, options = list(scrollX = TRUE)) %>%
+        formatStyle(columns = c(1:colSize), fontSize = '80%')
+    )
+  )
+  
+  #kegg <- format(kegg, digits=2, nsmall=1)
+  write.csv(kegg, file=paste(directory, name, "_sig_results", tag, ".kegg.", contrast, ".csv", sep=""))
+  
+}
