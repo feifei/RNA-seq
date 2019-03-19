@@ -1,5 +1,5 @@
 ---
-title: "edgeR for DE analysis of Lauras Caco-2 cells interacting with trophozoite Giardia cells, Human part"
+title: "edgeR for DE analysis of Caco-2 cells interacting with trophozoite Giardia cells, Giardia part"
 author: "Feifei Xu"
 date: "`r Sys.Date()`"
 output: 
@@ -34,69 +34,35 @@ source("DE_fun.R")
 
 
 # Background
-This report provides the analysis of RNA-Seq data from Caco-2 cells interacting with *Giardia* trophozoites
-encystating *Giardia* cells, only the Caco2 cell (human) part. *Giardia* analysis is done in a separate file.
+This report provides the analysis of RNA-Seq data from Caco-2 cells interacting with trophozoite *Giardia* cells, only the *Giardia* part.  Caco2 cell (human) analysis is done in a separate file.
 
-*Giardia* trophozoite cells was growing in TYDK media, and those *Giardia* cells were removed from TYDK media, and put into DMEM media (which is a human caco-2 cell media, and apparently *Giardia* cells do not grow happily in this media). *Giardia* cells will sit in DMEM for 10m, and then added to Caco-2 cells, where iteraction will start. 3 time points were taken during the interaction. 
+*Giardia* cells was growing in TYDK media,then those *Giardia* cells were removed from TYDK media, and put into DMEM media (which is a human caco-2 cell media, and apparently *Giardia* cells do not grow happily in this media). *Giardia* cells will sit in DMEM for 10m, and then added to Caco-2 cells, where iteraction will start. 3 time points were taken during the interaction.
 
-A, B, C marks the three bioreps.
+A, B, C makrs the three bioreps. 
 
 # Data prepartion
 The new *Giardia* WB genome was used. Human genome vGRCh38.p12 were downloaded from https://www.gencodegenes.org/releases/current.html (2018-07-31).`GRCh38.primary_assembly.genome.fa` and `gencode.v28.annotation.gtf`.
 
 `STAR` v020201 was used to map the concatenated reference genomes. Detailed command see `Laura/mapping2/star.sh`
-`htseq-count` which I used for the other projects generates mostly empty gene counts, so used `ReadsPerGene.out.tab` output from `STAR` with specifying `--quantMode GeneCounts`.
+`htseq-count` which I used for the other projects generates mostly empty gene counts, so used `ReadsPerGene.out.tab` output from `STAR` with specifying `--quantMode GeneCounts`. 
 
-## Load data
-Specify annotation file, metadata file, ensemble genes, length infos, and the GO terms for the genes.
-
-
-```{r}
-# Get gene lengths and go annotation from biomart
-destfile <- 'data/genes_go_kegg.rda'
-if(!file.exists(destfile)){
-  human = useMart("ensembl", dataset="hsapiens_gene_ensembl") # hg38
-  genes <- getBM(
-    attributes=c('ensembl_gene_id', 'entrezgene', 'external_gene_name', 'chromosome_name', 'description'),
-    # filters="ensembl_gene_id", 
-    # values=genes,
-    mart = human)
-  
-  genes$description <- sapply(strsplit(genes$description, split=' [', fixed=TRUE), function(x) (x[1]))
-  
-  # Length is the sum of union of all exon intervals. EDASeq
-  gene_len <- getGeneLengthAndGCContent(genes$ensembl_gene_id, "hsa")
-  genes$length <- gene_len[, 'length'] 
-  
-  GOmap = getBM(
-    attributes = c("ensembl_gene_id", "go_id"), 
-    mart = human)
-
-  KEGGmap = getBM(
-    attributes = c("ensembl_gene_id", "kegg_enzyme"),
-    mart = human)
-  
-  save(genes, GOmap, KEGGmap, file=destfile)
-} else {
-  load(destfile)
-}
-```
-
-```{r}
-name <- "human"
-directory <- "data/"
-meta_file <- "data/metadata2.tab"
-cell <- "trophozoite"
-```
 
 ## Data summary
 
 ```{r}
+name <- "giardia"
+directory <- "data/"
+meta_file <- "data/metadata2.tab"
+cell <- "trophozoite"
+
+annotation_tab <- "data/wb_annotation.tab"
+
 d <- read.csv(meta_file, sep = ",")
 d <- d[d[, "cell"] == cell, ]
+
 count_files <- paste(d$identifier, ".", name, ".counts", sep = "")
 d$count_files <- count_files
-d <- d[-c(1,6,11), ] # Remove Giairdia controls
+d <- d[-c(2,7,12), ] # Remove Human controls
 d <- d[with(d, order(hour, condition)), ]
 
 group <- factor(paste(d$condition, d$hour, sep = "_"))
@@ -106,7 +72,7 @@ datatable(d, options = list(scrollX = TRUE))
 
 ## Read counts distribution
 Plot the read counts distribution of the human vs *Giardia*.
-```{r, fig.height = 5, fig.width = 9, eval = FALSE}
+```{r, fig.height = 5, fig.width = 9}
 barplot(t(as.matrix(cbind(d$Human_reads_in_gene_count, d$Giardia_reads_in_gene_count))), 
         col = c("blue", "green"), border = NA,
         legend.text = c("Human", "Giardia"), args.legend = list(bty = "n", border = NA),
@@ -119,25 +85,18 @@ Read and merge files containing gene expression counts.
 ```{r}
 y <- readDGE(d$count_files, path = "counts", group = d$group, header = FALSE)
 colnames(y$counts) <- group
-# rownames, aka geneid has suffix which were trimmed, and duplciated entry with _PAR_Y were removed
-old_rownames <- rownames(y$counts)
-bad_row_idx <- grep("_PAR_Y", old_rownames)
-sub_rownames <- old_rownames[- bad_row_idx]
-new_rownames <- sapply(strsplit(sub_rownames, split = '.', fixed = TRUE), function(x) (x[1]))
-y$counts <- y$counts[- bad_row_idx, ]
-rownames(y$counts) <- new_rownames
 ```
 
 ## Gene annotation
-Add annotation to the DGEList. Genes that present in the databases but not in the released GTF files used for mapping, are either pseudogenes, or not included for some reasons that I don't know.
+Add annotation to the DGEList. Genes that present in the databases but not in the released GTF fiels used for mapping, are either pseudogenes, or not included for some reasons that I don't know.
 ```{r}
-nrow(genes)
-nrow(y$counts)
-y$genes <- genes[match(rownames(y$counts), genes$ensembl_gene_id), ]
+annotation <- read.csv(file=annotation_tab, head=TRUE, sep="\t")
+sub_annotation <- annotation[match(rownames(y$counts), annotation$Geneid), ]
+y$genes <- sub_annotation
 ```
 
 ## Data filtering
-Only genes with reasonable expression level should be included in the analysis. Keep genes with at least 2 counts per million in at least 3 samples (3 replicates).
+Only genes with reasonable expression level should be included in the analysis. Keep genes with at least 2 counts per million in at least 2 samples (3 replicates).
 
 There are lots of small RNAs in the very first list of genes, most unrelavant ones were filtered. Consider human genomes have around 20,000 genes, it's a good sign that we have this much keep after filtering.
 
@@ -151,11 +110,10 @@ y <- y[keep, , keep.lib.sizes = FALSE]
 ```
 
 ## Library sizes
-Plot number of reads matched per sample, and total for each gene across all samples. Library sizes varies from 15 to 50 millions.
+Plot number of reads matched per sample, and total for each gene across all samples. Library sizes varies from 1 to 5 millions.
 
-The gene which is way over expressed compared to the others is ENSG00000156508, eukaryotic translation elongation factor 1 alpha 1. In all the 10 genes which has more than 1 million reads in total, half of them are mitochondrially encoded. 
 
-```{r, eval = FALSE}
+```{r}
 counts_per_sample <- colSums(y$counts)
 names(counts_per_sample) <- d$hour
 cols <- as.numeric(d$condition) + 2
@@ -189,13 +147,8 @@ Below we can compare the different libraries before and after normalizations.
 Relative Log Expression (RLE) plot is a powerful tool for visualizaing unwanted variation in high dimensional data. Ideally all boxplots should be centered around 0 and be of similar width. Compare the boxplots before and after normaliztion, we can see that normalization did a good job. 
 
 
-```{r}
+```{r, fig.width=9, fig.height=6}
 group.col <- diverge_hcl(length(levels(group)))[factor(group)]
-
-```
-
-
-```{r, fig.width=9, fig.height=6, eval = FALSE}
 boxplot(sweep(logCPM_prenorm, 1, median_prenorm, "-"), 
         col = group.col, 
         las = 2, main = "RLE plot pre-normalization")
@@ -219,7 +172,7 @@ plotMDS(y, labels = group,
 ```
 
 ## Sample clustering - Batch adjusted
-The samples were collected in 3 different batches (replicates). If we look at the sample clustering after removing this batch effect, samples from the same condition and time cluster more togther. The two controls do not cluster well, but at least are well sepearted from the infection interaction samples. This shows that the batch adjustment make sense. So we are continuing the DE analysis with batch adjusted data.
+The samples were collected in 3 different batches (replicates). If we look at the sample clustering after removing this batch effect, samples from the same condition and time cluster more togther. Control is well separated from the rest, but the three infection time points do not seperate well, specially 3h and 4.5h. At least the batch adjustment seem to make sense. So we are continuing the DE analysis with batch adjusted data.
 
 ```{r}
 design <- model.matrix(~0+group)
@@ -240,7 +193,7 @@ plotMDS(logCPM, labels = group,
 Include batch as the base of the new design (model).
 ```{r}
 design <- model.matrix(~0 + batch + group)
-colnames(design)[-c(1:length(levels(batch)))] <- levels(group)[-1]
+colnames(design)[4:6] <- levels(group)[2:4]
 ```
 
 ## Biological variation
@@ -278,7 +231,7 @@ my.contrasts <- makeContrasts(
   
   Infection_3vs1.5 = infection_3 - infection_1.5,
   Infection_4.5vs3 = infection_4.5 - infection_3,
-    
+  
   levels = design
 )
 colnames(my.contrasts)
@@ -290,7 +243,7 @@ qlf_d <- qlf_dictionary(fit, my.contrasts)
 ```
 
 ```{r, results="asis", fig.show='asis', message=F, warning=F, fig.width=8}
-tag = ""
+tag = "-BA"
 result_summary <- matrix(, nrow=3, ncol=0) # DE number summary
 result_logFC1_summary <- matrix(, nrow=2, ncol=0) # DE with abs(logFC)>1 summary
 DT_mat <- matrix(, nrow=nrow(fit), ncol=0) # DE as 1, 0, -1
@@ -328,12 +281,10 @@ for (contrast in names(qlf_d) ) {
   plot_logFCvslogCPM(qlf, contrast)
   plot_pheatmap(qlf, summ, contrast)
   plot_valcano(all.genes.t, contrast)
-  export_DE(DE.genes.t, directory, name, cell, contrast)
-  export_all(all.genes.t, directory, name, cell, contrast)
-  export_cpm(DE.genes.t, directory, name, cell, contrast)
-  go_analysis(y, GOmap, isDE, dt, contrast)
-  kegg_analysis(up_down, lengthData, isDE_int, KEGGmap)
-  # go_kegg_analysis(y, isDE, dt, directory, name, cell, contrast)
+  export_DE(directory, name, DE.genes.t, contrast)
+  export_all(directory, name, all.genes.t, contrast)
+  export_cpm(directory, name, DE.genes.t, contrast)
+  # go_analysis(y, GOmap, isDE, dt, contrast)
 }
 colnames(logFC_mat) <- dimnames(my.contrasts)$Contrasts
 colnames(result_summary) <- dimnames(my.contrasts)$Contrasts
@@ -373,12 +324,13 @@ vennDiagram(DT_mat_interested, cex = c(1, 1, 0.8), include = c("up", "down"), co
     "blue"), main = "Common/uniquly regulated genes")
 ```
 
+
 ## Heatmap of the logFC 
 Heatmap of the logFC of the DE genes as well as heatmap of the top 500 genes.
 ```{r}
 # subset logFC_mat to DE logFC_mat
-thr <- 5
-topX <- 500
+thr <- 3
+topX <- 1000
 ncol_DT_mat <- ncol(DT_mat)
 DT_mat_DE <- DT_mat[apply(DT_mat, MARGIN=1, function(x) any(abs(x) == 1)), ]
 logFC_mat[logFC_mat < -thr] <- -thr

@@ -7,6 +7,7 @@ library(ggplot2)
 library(reshape2)
 library(pheatmap)
 library(org.Hs.eg.db)
+library(limma)
 
 
 qlf_dictionary <- function(fit, my.contrasts, ...) {
@@ -52,7 +53,7 @@ plot_valcano <- function(all.genes.t, contrast, ...) {
   with(subset(all.genes.t, FDR<.05 & abs(logFC)>1), points(logFC, -log10(PValue), pch=20, col="green"))
 }
 
-export_DE <- function(directory, name, DE.genes.t, contrast, tag = "", ...) {
+export_DE <- function(DE.genes.t, directory, name, cell, contrast, tag = "", ...) {
   cat("\n\n### Export significant cases\n")
   cat("The table lists all the DE with abs(logFC) > 1 and FDR< 0.05. \n\n")
   
@@ -69,20 +70,20 @@ export_DE <- function(directory, name, DE.genes.t, contrast, tag = "", ...) {
   )
   
   DE.genes.t <- format(DE.genes.t, trim=TRUE, digits=2, nsmall=2)
-  write.csv(DE.genes.t, file=paste(directory, name, "_sig_results", tag, ".", contrast, ".csv", sep=""), 
+  write.csv(DE.genes.t, file=paste(directory, name, ".", cell, ".", contrast, ".sig_results", tag, ".csv", sep=""), 
             row.names = FALSE)
 }
 
-export_all <- function(directory, name, all.genes.t, contrast, tag = "", ...) {
+export_all <- function(all.genes.t, directory, name, cell, contrast, tag = "", ...) {
   cat("\n\n### Export all genes\n")
   cat("The table lists all the genes. \n\n")
   
   all.genes.t <- format(all.genes.t, trim=TRUE, digits=2, nsmall=2)
-  write.csv(all.genes.t, file=paste(directory, name, "_all", tag, ".", contrast, ".csv", sep=""), 
+  write.csv(all.genes.t, file=paste(directory, name, ".", cell, ".", contrast, ".all", tag, ".csv", sep=""), 
             row.names = FALSE)
 }
 
-export_cpm <- function(directory, name, DE.genes.t, contrast, tag = "", ...) {
+export_cpm <- function(DE.genes.t, directory, name, cell, contrast, tag = "", ...) {
   cat("\n\n### Export logCPM values of the DE\n")
   cat("Inspect the depth-adjusted reads per million for the top differentially expressed. \n\n")
   
@@ -103,7 +104,7 @@ export_cpm <- function(directory, name, DE.genes.t, contrast, tag = "", ...) {
   ) 
   
   DE.cpm <- format(DE.cpm, digits=2, nsmall=1)
-  write.csv(DE.cpm, file=paste(directory, name, "_sig_results", tag, ".cpm.", contrast, ".csv", sep=""))
+  write.csv(DE.cpm, file=paste(directory, name, ".", cell, ".", contrast, ".sig_results.cpm", tag, ".csv", sep=""))
 }
 
 go_enrich_plot <- function(GOmap, genes, lengthData, contrast, tag = "", extra_tag = "", ...) {
@@ -144,9 +145,24 @@ go_up_down <- function(GOmap, up_down, genes, lengthData, contrast, extra_tag = 
   print (p)
   cat('\r\n\r\n')
   
-  enriched.GO=GO.wall$category[p.adjust(GO.wall$over_represented_pvalue, method="BH")<.05]
-  if (length(enriched.GO) == 0) return()
+  GO.wall$FDR <- p.adjust(GO.wall$over_represented_pvalue, method="BH")
+  GO.wall.sig <- GO.wall[GO.wall$FDR < 0.05, ]
+  if (nrow(GO.wall.sig) == 0) return()
+  write.csv(GO.wall.sig, file=paste(directory, name, ".", cell, ".", contrast,
+                                    ".sig_results.GO.", extra_tag, tag, ".csv", sep=""),
+            row.names = FALSE)
+  
+  enriched.GO=GO.wall.sig$category
   cat("------------ Enriched", extra_tag, "-regulated GO ------------\r\n")
+  
+  # Workaround in printing table in loop
+  print(
+    htmltools::tagList(
+      datatable(GO.wall.sig, options = list(scrollX = TRUE), rownames = FALSE) %>%
+        formatStyle(columns = c(1:colSize), fontSize = '80%')
+    )
+  )
+  
   print(enriched.GO)
   cat("\n")
   for(go in enriched.GO){
@@ -163,9 +179,9 @@ go_up_down <- function(GOmap, up_down, genes, lengthData, contrast, extra_tag = 
 
 go_analysis <- function(y, GOmap, isDE, dt, contrast, tag = "", ...) {
   ########################
-  # Go enrichment analysis with goseq
+  # Go enrichment analysis with goseq, which adjust for gene length bias
   ########################
-  cat("\n\n\n\n### GO analysis \n\n")
+  cat("\n\n\n\n### GO analysis with goseq \n\n")
   isDE_int <- as.integer(isDE)
   names(isDE_int) <- rownames(y)
   
@@ -197,44 +213,93 @@ go_analysis <- function(y, GOmap, isDE, dt, contrast, tag = "", ...) {
   }
 }
 
-go_kegg_analysis <- function(y, isDE, contrast, tag="", ...) {
+
+kegg_up_down <- function(up_down, lengthData, isDE_int, KEGGmap, extra_tag = "UP", ...) {
+  up_down <- up_down[up_down %in% names(lengthData)]
+  isDE_int <- isDE_int[names(isDE_int) %in% up_down]
+
+  pwf=nullp(isDE_int, bias.data=lengthData, plot.fit=FALSE)
+  KEGG=goseq(pwf,gene2cat=KEGGmap)
+  
+  KEGG$FDR <- p.adjust(KEGG$over_represented_pvalue, method="BH")
+  KEGG_sig <- KEGG[KEGG$FDR < 0.05, ]
+  if (nrow(KEGG_sig) == 0) return()
+  write.csv(KEGG_sig, file=paste(directory, name, ".", cell, ".", contrast,
+                                    ".sig_results.KEGG.", extra_tag, tag, ".csv", sep=""),
+            row.names = FALSE)
+  
+  # Workaround in printing table in loop
+  print(
+    htmltools::tagList(
+      datatable(KEGG_sig, options = list(scrollX = TRUE), rownames = FALSE) %>%
+        formatStyle(columns = c(1:colSize), fontSize = '80%')
+    )
+  )
+}
+
+kegg_analysis <- function(up_down, lengthData, isDE_int, KEGGmap, ...) {
+  ########################
+  # KEGG enrichment analysis with goseq, which adjust for gene length bias
+  ########################
+  cat("\n\n\n\n### KEGG analysis with goseq \n\n")
+  isDE_int <- as.integer(isDE)
+  names(isDE_int) <- rownames(y)
+  isDE_int <- isDE_int[!is.na(isDE_int)]
+  
+  length_vect <- y$genes$length
+  names(length_vect) <- rownames(y)
+  
+  up = rownames(y)[which(dt == 1)]
+  down = rownames(y)[which(dt == -1)]
+  
+  kegg_up_down(up, lengthData, isDE_int, KEGGmap, extra_tag = "UP")
+  kegg_up_down(down, lengthData, isDE_int, KEGGmap, extra_tag = "DOWN")
+  
+  }
+
+
+
+########## Results from the following method is not good
+go_kegg_up_down <- function(up_down, go_kegg_tag = "GO", extra_tag = "UP", ...) {
+  if (go_kegg_tag == "GO") {
+    go_kegg <- goana(up_down, species = "Hs")
+    top_go_kegg <- topGO(go_kegg)
+  } else if (go_kegg_tag == "KEGG") {
+    go_kegg <- kegga(up_down, species = "Hs")
+    top_go_kegg <- topKEGG(go_kegg)
+  }
+  go_kegg <- go_kegg[order(go_kegg$P.DE), ] # Order
+  go_kegg <- go_kegg[go_kegg$P.DE < 0.05, ] # Filter
+  top_go_kegg$P.DE <- format(top_go_kegg$P.DE, nsmall=1, digits = 3)
+  colSize = ncol(top_go_kegg)
+  # Workaround in printing table in loop
+  print(
+    htmltools::tagList(
+      datatable(top_go_kegg, options = list(scrollX = TRUE)) %>%
+        formatStyle(columns = c(1:colSize), fontSize = '80%')
+    )
+  )
+  
+  if (nrow(go_kegg) > 1) { 
+    write.csv(go_kegg, 
+              file=paste(directory, name, ".", cell, ".", contrast, ".sig_results.", 
+                         go_kegg_tag, ".", extra_tag, tag, ".csv", sep=""))
+  }
+}
+
+go_kegg_analysis <- function(y, isDE, dt, directory, name, cell, contrast, tag="", ...) {
   ########################
   # Go and KEGG enrichment analysis with limma
   ########################
   cat("\n\n\n\n### GO & KEGG analysis \n\n")
   
-  go <- goana(y$genes$entrezgene[isDE], species = "Hs")
-  go <- go[order(go$P.DE), ]
+  ####
+  # Separate Up and Down regulation
+  up = y$genes$entrezgene[which(dt == 1)]
+  down = y$genes$entrezgene[which(dt == -1)]
   
-  top_go <- topGO(go)
-  top_go$P.DE <- format(top_go$P.DE, nsmall=1, digits = 3)
-  colSize = ncol(top_go)
-  # Workaround in printing table
-  print(
-    htmltools::tagList(
-      datatable(top_go, options = list(scrollX = TRUE)) %>%
-        formatStyle(columns = c(1:colSize), fontSize = '80%')
-    )
-  )
-  
-  #go <- format(go, digits=2, nsmall=1)
-  write.csv(go, file=paste(directory, name, "_sig_results", tag, ".go.", contrast, ".csv", sep=""))
-  
-  
-  kegg <- kegga(y$genes$entrezgene[isDE], species = "Hs")
-  kegg <- kegg[order(kegg$P.DE), ]
-  
-  top_kegg <- topKEGG(kegg)
-  top_kegg$P.DE <- format(top_kegg$P.DE, nsmall=1, digits = 3)
-  colSize = ncol(top_kegg)
-  print(
-    htmltools::tagList(
-      datatable(top_kegg, options = list(scrollX = TRUE)) %>%
-        formatStyle(columns = c(1:colSize), fontSize = '80%')
-    )
-  )
-  
-  #kegg <- format(kegg, digits=2, nsmall=1)
-  write.csv(kegg, file=paste(directory, name, "_sig_results", tag, ".kegg.", contrast, ".csv", sep=""))
-  
+  go_kegg_up_down(up, go_kegg_tag = "GO", extra_tag = "UP")
+  go_kegg_up_down(down, go_kegg_tag = "GO", extra_tag = "DOWN")
+  go_kegg_up_down(up, go_kegg_tag = "KEGG", extra_tag = "UP")
+  go_kegg_up_down(down, go_kegg_tag = "KEGG", extra_tag = "DOWN")
 }

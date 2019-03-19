@@ -50,7 +50,7 @@ The new *Giardia* WB genome was used. Human genome vGRCh38.p12 were downloaded f
 Specify annotation file, metadata file, ensemble genes, length infos, and the GO terms for the genes.
 
 
-```{r, cache=TRUE}
+```{r}
 # Get gene lengths and go annotation from biomart
 destfile <- 'data/genes_go_kegg.rda'
 if(!file.exists(destfile)){
@@ -83,15 +83,16 @@ if(!file.exists(destfile)){
 
 
 
-```{r, cache=TRUE}
+```{r}
 name <- "human"
+cell <- "encysting"
 directory <- "data/"
 meta_file <- "data/metadata.tab"
 ```
 
 ## Data summary
 
-```{r, cache=TRUE}
+```{r}
 d <- read.csv(meta_file, sep = ",")
 count_files <- paste(d$identifier, ".", name, ".counts", sep = "")
 d$count_files <- count_files
@@ -105,7 +106,7 @@ datatable(d, options = list(scrollX = TRUE))
 
 ## Read counts distribution
 Plot the read counts distribution of the human vs *Giardia*.
-```{r, fig.height = 5, fig.width = 9, cache=TRUE}
+```{r, fig.height = 5, fig.width = 9}
 barplot(t(as.matrix(cbind(d$Human_reads_in_gene_count, d$Giardia_reads_in_gene_count))), 
         col = c("blue", "green"), border = NA,
         legend.text = c("Human", "Giardia"), args.legend = list(bty = "n", border = NA),
@@ -115,7 +116,7 @@ barplot(t(as.matrix(cbind(d$Human_reads_in_gene_count, d$Giardia_reads_in_gene_c
 ## Build DGE
 Read and merge files containing gene expression counts.
 
-```{r, cache=TRUE}
+```{r}
 y <- readDGE(d$count_files, path = "counts", group = d$group, header = FALSE)
 colnames(y$counts) <- group
 # rownames, aka geneid has suffix which were trimmed, and duplciated entry with _PAR_Y were removed
@@ -129,7 +130,7 @@ rownames(y$counts) <- new_rownames
 
 ## Gene annotation
 Add annotation to the DGEList. Genes that present in the databases but not in the released GTF fiels used for mapping, are either pseudogenes, or not included for some reasons that I don't know.
-```{r, cache=TRUE}
+```{r}
 nrow(genes)
 nrow(y$counts)
 y$genes <- genes[match(rownames(y$counts), genes$ensembl_gene_id), ]
@@ -140,7 +141,7 @@ Only genes with reasonable expression level should be included in the analysis. 
 
 There are lots of small RNAs in the very first list of genes, most unrelavant ones were filtered. Consider human genomes have around 20,000 genes, it's a good sign that we have this much keep after filtering.
 
-```{r, cache=TRUE}
+```{r}
 CPM <- cpm(y)
 summary(CPM)
 
@@ -154,7 +155,7 @@ Plot number of reads matched per sample, and total for each gene across all samp
 
 The gene which is way over expressed compared to the others is ENSG00000156508, eukaryotic translation elongation factor 1 alpha 1. In all the 10 genes which has more than 1 million reads in total, half of them are mitochondrially encoded. 
 
-```{r, cache=TRUE}
+```{r}
 counts_per_sample <- colSums(y$counts)
 names(counts_per_sample) <- d$hour
 cols <- as.numeric(d$condition) + 2
@@ -173,7 +174,7 @@ The raw library sizes were normalized with a scaling factor for each sample so t
 
 We can see the normalization factors are all quite close to 1, indicating good library quality.
 
-```{r, cache=TRUE}
+```{r}
 logCPM_prenorm <- cpm(y, log = TRUE, prior.count = 2)
 median_prenorm <- rowMedians(logCPM_prenorm)
 
@@ -189,7 +190,7 @@ Below we can compare the different libraries before and after normalizations.
 Relative Log Expression (RLE) plot is a powerful tool for visualizaing unwanted variation in high dimensional data. Ideally all boxplots should be centered around 0 and be of similar width. Compare the boxplots before and after normaliztion, we can see that normalization did a good job. 
 
 
-```{r, fig.width=9, fig.height=6, cache=TRUE}
+```{r, fig.width=9, fig.height=6}
 group.col <- diverge_hcl(length(levels(group)))[factor(group)]
 boxplot(sweep(logCPM_prenorm, 1, median_prenorm, "-"), 
         col = group.col, 
@@ -205,7 +206,7 @@ abline(h = 0, lty = 2)
 ## Sample clustering
 The MDS plot shows the unsupervised clustering of the samples. It's a two-dimensional scatterplot that the distances on the plot approximate the typical log2-fold changes between the samples based the top 500 most variable genes between each pair of samples. On this plot, we can see that samples from the same conditions are not well grouped. But there seem to be clear batch effort seperated by dim2. Thus batch effect is adjusted in the next step.
 
-```{r, cache=TRUE}
+```{r}
 batch <- factor(d$batch)
 plotMDS(y, col = as.character(group.col), main = "colored after sample")
 plotMDS(y, labels = group,
@@ -216,7 +217,7 @@ plotMDS(y, labels = group,
 ## Sample clustering - Batch adjusted
 The samples were collected in 3 different batches (replicates). If we look at the sample clustering after removing this batch effect, samples from the same condition and time cluster more togther. The two controls do not cluster well, but at least are well sepearted from the infection interaction samples. This shows that the batch adjustment make sense. So we are continuing the DE analysis with batch adjusted data.
 
-```{r, cache=TRUE}
+```{r}
 design <- model.matrix(~0+group)
 colnames(design) <- levels(group)
 
@@ -233,19 +234,19 @@ plotMDS(logCPM, labels = group,
 
 ## New model
 Include batch as the base of the new design (model).
-```{r, cache=TRUE}
+```{r}
 design <- model.matrix(~0 + batch + group)
 colnames(design)[4:6] <- levels(group)[2:4]
 ```
 
 ## Biological variation
 The square root of the common dispersion gives the coefficient of variation of biological variation (BCV). The BCV indicates how the abundance of each gene varies between replicate samples. The common BCV for the data set is small, which is good.
-```{r, cache=TRUE}
+```{r}
 y <- estimateDisp(y, design, robust=TRUE)
 y$common.dispersion
 ```
 A plot of the averge $\log_2$CPM versus the BCV for each gene is shown below. The plot visualises how gene variation between replicate samples (BCV) changes as gene abundance ($\log_2$ counts per million) increase. We can see the trended dispersion shows a decreasing trend with expression level. Only the trended dispersion is used under the quasi-likelihood (QL) pipeline.
-```{r, cache=TRUE}
+```{r}
 plotBCV(y)
 ```
 
@@ -253,7 +254,7 @@ plotBCV(y)
 The QL dispersions can be estimated using a genewise negative binomial generalized linear models with Quasi-likelihood test (glmQLFit), and then be visualized with the plotQLDisp function. The large number of cases and the high variability means that the QL dispersions are not squeezed very heavily from the raw values
 The data is transformed to $\log_2$CPM.
 
-```{r, cache=TRUE}
+```{r}
 fit <- glmQLFit(y, design, robust=TRUE)
 plotQLDisp(fit)
 ```
@@ -265,7 +266,7 @@ QL F-test (glmQLFTest) were used to determine significant differential expressio
 ## Contrasts
 Comparisons of interest listed below. Contrast defines the null hypothesis as the comparison intersted to be equal to zero.
 
-```{r, cache=TRUE}
+```{r}
 my.contrasts <- makeContrasts(
   Infection_1.5vs0 = infection_1.5,
   Infection_3vs0 = infection_3,
@@ -279,12 +280,12 @@ my.contrasts <- makeContrasts(
 colnames(my.contrasts)
 ```
 
-```{r, cache=TRUE}
+```{r}
 # generate dictionary of contrast:qlf
 qlf_d <- qlf_dictionary(fit, my.contrasts)
 ```
 
-```{r, results="asis", fig.show='asis', message=F, warning=F, fig.width=8, cache=TRUE}
+```{r, results="asis", fig.show='asis', message=F, warning=F, fig.width=8}
 tag = ""
 result_summary <- matrix(, nrow=3, ncol=0) # DE number summary
 result_logFC1_summary <- matrix(, nrow=2, ncol=0) # DE with abs(logFC)>1 summary
@@ -323,11 +324,11 @@ for (contrast in names(qlf_d) ) {
   plot_logFCvslogCPM(qlf, contrast)
   plot_pheatmap(qlf, summ, contrast)
   plot_valcano(all.genes.t, contrast)
-  export_DE(directory, name, DE.genes.t, contrast)
-  export_all(directory, name, all.genes.t, contrast)
-  export_cpm(directory, name, DE.genes.t, contrast)
+  export_DE(DE.genes.t, directory, name, cell, contrast)
+  export_all(all.genes.t, directory, name, cell, contrast)
+  export_cpm(DE.genes.t, directory, name, cell, contrast)
   go_analysis(y, GOmap, isDE, dt, contrast)
-  go_kegg_analysis(y, isDE, contrast, tag)
+  go_kegg_analysis(y, isDE, directory, name, cell, contrast)
 }
 colnames(logFC_mat) <- dimnames(my.contrasts)$Contrasts
 colnames(result_summary) <- dimnames(my.contrasts)$Contrasts
@@ -338,7 +339,7 @@ colnames(result_logFC1_summary) <- dimnames(my.contrasts)$Contrasts
 ## Summary of DE genes
 Genes that are DE are the ones with adjusted p-value (same as FDR in the table) less than a defined false discovery (FDR) rate. The adjusted p-value is used as opposed to the initial p-value as it has been adjusted for multiple testing. The FDR cutoff is set at 0.05. So genes with adjusted p-value < 0.05 is considered as DE, which were further classified into up- or down- regulated. Up-regulated genes has a positve log-fold change, while down-regulated genes has a negative log-fold change. DE with abs(logFC) > 1 was also show below.
 
-```{r, cache=TRUE}
+```{r}
 rownames(result_logFC1_summary) <- c("Down.logFC<-1", "Up.logFC>1")
 merged_summary <- cbind(t(result_summary[-2,]), t(result_logFC1_summary))
 datatable(merged_summary)
@@ -349,7 +350,7 @@ datatable(merged_summary)
 Venn Diagram of the most interested comparisons with multiple DE. Note the numbers do not agree between both venn diagrams. The second diagram shows only those genes that were either up in both samples or down in both samples.
 The first diagram also includes genes that were up in one sample and down in the other, which is a less restrictive criterion. 
 And the total numbers in each contrast do add up the same.
-```{r, fig.width=8, cache=TRUE}
+```{r, fig.width=8}
 DT_mat_interested <- DT_mat[, c("Infection_1.5vs0", 
                                 "Infection_3vs0",
                                 "Infection_4.5vs0")]
@@ -358,7 +359,7 @@ vennDiagram(DT_mat_interested, cex = c(1, 1, 0.8), include = c("up", "down"), co
     "blue"), main = "Common/uniquly regulated genes")
 ```
 
-```{r, fig.width=8, cache=TRUE}
+```{r, fig.width=8}
 DT_mat_interested <- DT_mat[, c("Infection_1.5vs0", 
                                 "Infection_3vs1.5",
                                 "Infection_4.5vs3")]
@@ -369,7 +370,7 @@ vennDiagram(DT_mat_interested, cex = c(1, 1, 0.8), include = c("up", "down"), co
 
 ## Heatmap of the logFC 
 Heatmap of the logFC of the DE genes as well as heatmap of the top 500 genes.
-```{r, cache=TRUE}
+```{r}
 # subset logFC_mat to DE logFC_mat
 thr <- 5
 topX <- 500
