@@ -6,8 +6,7 @@ library(goseq)
 library(ggplot2)
 library(reshape2)
 library(pheatmap)
-library(org.Hs.eg.db)
-library(limma)
+library(KEGGREST)
 
 
 qlf_dictionary <- function(fit, my.contrasts, ...) {
@@ -68,6 +67,11 @@ export_DE <- function(DE.genes.t, directory, name, cell, contrast, tag = "", ...
         formatRound(c(5:7), 2)
     )
   )
+  if (nrow(DE.genes.t) >= 10){
+    cat(paste(rep("\n", 11), collapse = ""))
+  } else {
+    cat(paste(rep("\n", nrow(DE.genes.t)), collapse = ""))
+  }
   
   DE.genes.t <- format(DE.genes.t, trim=TRUE, digits=2, nsmall=2)
   write.csv(DE.genes.t, file=paste(directory, name, ".", cell, ".", contrast, ".sig_results", tag, ".csv", sep=""), 
@@ -75,7 +79,7 @@ export_DE <- function(DE.genes.t, directory, name, cell, contrast, tag = "", ...
 }
 
 export_all <- function(all.genes.t, directory, name, cell, contrast, tag = "", ...) {
-  cat("\n\n### Export all genes\n")
+  cat("\n\n\n\n\n\n### Export all genes\n")
   cat("The table lists all the genes. \n\n")
   
   all.genes.t <- format(all.genes.t, trim=TRUE, digits=2, nsmall=2)
@@ -102,60 +106,34 @@ export_cpm <- function(DE.genes.t, directory, name, cell, contrast, tag = "", ..
         formatRound(c(1:colSize), 1)
     )
   ) 
+  if (nrow(DE.cpm) >= 10){
+    cat(paste(rep("\n", 11), collapse = ""))
+  } else {
+    cat(paste(rep("\n", nrow(DE.cpm)), collapse = ""))
+  }
   
   DE.cpm <- format(DE.cpm, digits=2, nsmall=1)
   write.csv(DE.cpm, file=paste(directory, name, ".", cell, ".", contrast, ".sig_results.cpm", tag, ".csv", sep=""))
 }
 
-go_enrich_plot <- function(GOmap, genes, lengthData, contrast, tag = "", extra_tag = "", ...) {
-  # Find GO enrichment, and plot term vs num
-  pwf=nullp(genes, bias.data=lengthData, plot.fit=FALSE)
-  GO.wall=goseq(pwf,gene2cat=GOmap)
-  
-  GO.wall.sub = GO.wall[GO.wall$numDEInCat >= 5 | p.adjust(GO.wall$over_represented_pvalue, method="BH")<1,]
-  if (nrow(GO.wall.sub) <= 1) return()
-  GO.wall.sub$term <- reorder(GO.wall.sub$term, GO.wall.sub[-1]$numDEInCat)
-  GO.wall.sub.m <- melt(GO.wall.sub, id=c("category","term", "over_represented_pvalue","under_represented_pvalue","ontology"))
-  
-  # GO.wall.sub$ontology[is.na(GO.wall.sub$ontology)] <- "NA"
-  GO.wall.sub.sub <- head(GO.wall.sub[order(GO.wall.sub$numDEInCat,decreasing=TRUE),], n = 50)
-  p <- ggplot(subset(GO.wall.sub.sub, !is.na(ontology)), 
-              aes(term, numDEInCat, fill=ontology))
-  # p <- ggplot(GO.wall.sub, aes(term, numDEInCat, fill=ontology))
-  p <- p + geom_bar(stat="identity", position=position_dodge()) +
-    coord_flip() + labs(title=paste(contrast, extra_tag, tag)) +
-    scale_x_discrete(label=function(x) substr(x, 1, 40))
-  return (list("GO.wall" = GO.wall, "GO.wall.sub.m" = GO.wall.sub.m, "plot" = p))
-}
 
-go_up_down <- function(GOmap, up_down, genes, lengthData, contrast, extra_tag = "", tag = "", ...) {
-  sub_up_down <- up_down[up_down %in% names(lengthData)]
-  sub_genes <- as.integer(names(genes) %in% sub_up_down)
-  names(sub_genes) <- names(genes)
-  g <- go_enrich_plot(GOmap, sub_genes, lengthData, contrast, extra_tag = extra_tag, tag = tag)
-  if (is.null(g)) return()
-  p <- g$plot
-  GO.wall = g$GO.wall
-  GO.wall.sub.m = g$GO.wall.sub.m
-  if (length(unique(GO.wall.sub.m$ontology)) == 3) {
-    p <- p + scale_fill_manual(values=c("#F8766D", "#00BA38", "#999999"))
-  } else {
-    p <- p + scale_fill_manual(values=c("#F8766D", "#00BA38", "#619CFF", "#999999"))
-  }
-  print (p)
-  cat('\r\n\r\n')
+go_up_down <- function(genes, lengthData, GOmap, extra_tag = "UP", ...){
+  cat(paste("\n\n### GO analysis with goseq - ", extra_tag, "\n", sep = ""))
+
+  pwf <- nullp(genes, "hg38", "ensGene", bias.data = lengthData, plot.fit=FALSE)
+  GO.wall <- goseq(pwf, gene2cat=GOmap)
+  GO.wall$padj <- p.adjust(GO.wall$over_represented_pvalue, method="BH")
+  GO.wall.sig <- subset(GO.wall, GO.wall$padj<.05)
+  GO.wall.sig$ratio <- GO.wall.sig$numDEInCat / GO.wall.sig$numInCat
   
-  GO.wall$FDR <- p.adjust(GO.wall$over_represented_pvalue, method="BH")
-  GO.wall.sig <- GO.wall[GO.wall$FDR < 0.05, ]
   if (nrow(GO.wall.sig) == 0) return()
+  
   write.csv(GO.wall.sig, file=paste(directory, name, ".", cell, ".", contrast,
                                     ".sig_results.GO.", extra_tag, tag, ".csv", sep=""),
             row.names = FALSE)
   
-  enriched.GO=GO.wall.sig$category
-  cat("------------ Enriched", extra_tag, "-regulated GO ------------\r\n")
-  
   # Workaround in printing table in loop
+  colSize <- ncol(GO.wall.sig)
   print(
     htmltools::tagList(
       datatable(GO.wall.sig, options = list(scrollX = TRUE), rownames = FALSE) %>%
@@ -163,8 +141,17 @@ go_up_down <- function(GOmap, up_down, genes, lengthData, contrast, extra_tag = 
     )
   )
   
+  if (nrow(GO.wall.sig) >= 10){
+    cat(paste(rep("\n", 11), collapse = ""))
+  } else {
+    cat(paste(rep("\n", nrow(GO.wall.sig)), collapse = ""))
+  }
+  
+  cat("\n------------ Enriched", extra_tag, "-regulated GO ------------\r\n")
+  # Print the details of the GO term
+  enriched.GO <- GO.wall.sig$category
   print(enriched.GO)
-  cat("\n")
+  cat("\n\n")
   for(go in enriched.GO){
     goterm <- GOTERM[[go]]
     if (!is.null(goterm)) {
@@ -175,131 +162,81 @@ go_up_down <- function(GOmap, up_down, genes, lengthData, contrast, extra_tag = 
       cat("--------------------------------------\n\n") 
     }
   }
+  
+  # Plot the GO terms in barplot, order the term by decresing numDEInCat
+  GO.wall.sig$term <- reorder(GO.wall.sig$term, GO.wall.sig$numDEInCat)
+  GO.wall.sig <- GO.wall.sig[order(GO.wall.sig$numDEInCat, decreasing=TRUE),]
+  ggplot(subset(GO.wall.sig, !is.na(ontology)), 
+         aes(term, numDEInCat, fill=ontology)) + 
+    geom_bar(stat="identity", position=position_dodge()) +
+    coord_flip() + labs(title=paste(contrast, extra_tag, tag)) +
+    scale_x_discrete(label=function(x) substr(x, 1, 40))
+
 }
 
-go_analysis <- function(y, GOmap, isDE, dt, contrast, tag = "", ...) {
-  ########################
-  # Go enrichment analysis with goseq, which adjust for gene length bias
-  ########################
-  cat("\n\n\n\n### GO analysis with goseq \n\n")
-  isDE_int <- as.integer(isDE)
-  names(isDE_int) <- rownames(y)
-  
-  isDE_int <- isDE_int[!is.na(isDE_int)]
-  
-  length_vect <- y$genes$length
-  names(length_vect) <- rownames(y)
-  g <- go_enrich_plot(GOmap, isDE_int, length_vect, contrast)
-  if (is.null(g)) return()
-  p <- g$plot
-  print (p)
-  GO.wall.sub.m = g$GO.wall.sub.m
-  
-  # Plot ontology big class 
-  p <- ggplot(GO.wall.sub.m, aes(ontology, value, fill=variable))
-  print(p + geom_bar(stat="identity", position=position_dodge()) +
-          coord_flip() + labs(title=paste(contrast, tag)))
-  
-  
-  ####
-  # Separate Up and Down regulation
-  up = rownames(y)[which(dt == 1)]
-  down = rownames(y)[which(dt == -1)]
-  if (length(up) > 1){
-    go_up_down(GOmap, up, isDE_int, length_vect, contrast, extra_tag = "UP")
-  }
-  if (length(down) > 1) {
-    go_up_down(GOmap, down, isDE_int, length_vect, contrast, extra_tag = "DOWN")
-  }
+getPathwayName <- function(x) {
+  x <- paste("hsa", x, sep = "")
+  return(keggGet(x)[[1]]$NAME)
 }
 
-
-kegg_up_down <- function(up_down, lengthData, isDE_int, KEGGmap, extra_tag = "UP", ...) {
-  up_down <- up_down[up_down %in% names(lengthData)]
-  isDE_int <- isDE_int[names(isDE_int) %in% up_down]
-
-  pwf=nullp(isDE_int, bias.data=lengthData, plot.fit=FALSE)
-  KEGG=goseq(pwf,gene2cat=KEGGmap)
+kegg_up_down <- function(genes, lengthData, KEGGmap, extra_tag = "UP", ...){
+  cat(paste("\n\n\n### KEGG analysis with goseq - ", extra_tag, "\n", sep = ""))
   
-  KEGG$FDR <- p.adjust(KEGG$over_represented_pvalue, method="BH")
-  KEGG_sig <- KEGG[KEGG$FDR < 0.05, ]
-  if (nrow(KEGG_sig) == 0) return()
-  write.csv(KEGG_sig, file=paste(directory, name, ".", cell, ".", contrast,
+  pwf <- nullp(genes, "hg38", "ensGene", bias.data = lengthData, plot.fit=FALSE)
+  KEGG.wall <- goseq(pwf, gene2cat=KEGGmap)
+  KEGG.wall$padj <- p.adjust(KEGG.wall$over_represented_pvalue, method="BH")
+  KEGG.wall.sig <- subset(KEGG.wall, KEGG.wall$padj<.05)
+  KEGG.wall.sig$ratio <- KEGG.wall.sig$numDEInCat / KEGG.wall.sig$numInCat
+  
+  if (nrow(KEGG.wall.sig) == 0) return()
+  
+  # Add pathway info to the table
+  KEGG.wall.sig$term <- unlist(lapply(KEGG.wall.sig$category, getPathwayName))
+  
+  write.csv(KEGG.wall.sig, file=paste(directory, name, ".", cell, ".", contrast,
                                     ".sig_results.KEGG.", extra_tag, tag, ".csv", sep=""),
             row.names = FALSE)
   
   # Workaround in printing table in loop
+  colSize <- ncol(KEGG.wall.sig)
   print(
     htmltools::tagList(
-      datatable(KEGG_sig, options = list(scrollX = TRUE), rownames = FALSE) %>%
+      datatable(KEGG.wall.sig, options = list(scrollX = TRUE), rownames = FALSE) %>%
         formatStyle(columns = c(1:colSize), fontSize = '80%')
     )
   )
+  if (nrow(KEGG.wall.sig) >= 10){
+    cat(paste(rep("\n", 11), collapse = ""))
+  } else {
+    cat(paste(rep("\n", nrow(KEGG.wall.sig)), collapse = ""))
+  }
+  
 }
 
-kegg_analysis <- function(up_down, lengthData, isDE_int, KEGGmap, ...) {
-  ########################
-  # KEGG enrichment analysis with goseq, which adjust for gene length bias
-  ########################
-  cat("\n\n\n\n### KEGG analysis with goseq \n\n")
-  isDE_int <- as.integer(isDE)
-  names(isDE_int) <- rownames(y)
-  isDE_int <- isDE_int[!is.na(isDE_int)]
+goseq_analysis <- function(...) {
   
-  length_vect <- y$genes$length
-  names(length_vect) <- rownames(y)
+  lengthData <- y$genes$length
+  names(lengthData) <- rownames(y)
+  genes <- as.vector(dt)
+  names(genes) <- rownames(y)
   
-  up = rownames(y)[which(dt == 1)]
-  down = rownames(y)[which(dt == -1)]
+  # UPs
+  extra_tag <- "UP" 
+  genes.up <- genes
+  genes.up[genes.up == -1] <- 0 # Modify all the -1 to 0, look at the enrichment of the upregulated genes
+  go_up_down(genes.up, lengthData, GOmap, extra_tag)
+  kegg_up_down(genes.up, lengthData, KEGGmap, extra_tag)
   
-  kegg_up_down(up, lengthData, isDE_int, KEGGmap, extra_tag = "UP")
-  kegg_up_down(down, lengthData, isDE_int, KEGGmap, extra_tag = "DOWN")
+  # DOWNs
+  extra_tag <- "DOWN"
+  genes.down <- genes
+  genes.down[genes.down == 1] <- 0 
+  genes.down[genes.down == -1] <- 1 # Modify all the -1 to 1, look at the enrichment of the downregulated genes
+  go_up_down(genes.down, lengthData, GOmap, extra_tag)
+  kegg_up_down(genes.down, lengthData, KEGGmap, extra_tag)
   
-  }
 
-
-
-########## Results from the following method is not good
-go_kegg_up_down <- function(up_down, go_kegg_tag = "GO", extra_tag = "UP", ...) {
-  if (go_kegg_tag == "GO") {
-    go_kegg <- goana(up_down, species = "Hs")
-    top_go_kegg <- topGO(go_kegg)
-  } else if (go_kegg_tag == "KEGG") {
-    go_kegg <- kegga(up_down, species = "Hs")
-    top_go_kegg <- topKEGG(go_kegg)
-  }
-  go_kegg <- go_kegg[order(go_kegg$P.DE), ] # Order
-  go_kegg <- go_kegg[go_kegg$P.DE < 0.05, ] # Filter
-  top_go_kegg$P.DE <- format(top_go_kegg$P.DE, nsmall=1, digits = 3)
-  colSize = ncol(top_go_kegg)
-  # Workaround in printing table in loop
-  print(
-    htmltools::tagList(
-      datatable(top_go_kegg, options = list(scrollX = TRUE)) %>%
-        formatStyle(columns = c(1:colSize), fontSize = '80%')
-    )
-  )
-  
-  if (nrow(go_kegg) > 1) { 
-    write.csv(go_kegg, 
-              file=paste(directory, name, ".", cell, ".", contrast, ".sig_results.", 
-                         go_kegg_tag, ".", extra_tag, tag, ".csv", sep=""))
-  }
 }
 
-go_kegg_analysis <- function(y, isDE, dt, directory, name, cell, contrast, tag="", ...) {
-  ########################
-  # Go and KEGG enrichment analysis with limma
-  ########################
-  cat("\n\n\n\n### GO & KEGG analysis \n\n")
-  
-  ####
-  # Separate Up and Down regulation
-  up = y$genes$entrezgene[which(dt == 1)]
-  down = y$genes$entrezgene[which(dt == -1)]
-  
-  go_kegg_up_down(up, go_kegg_tag = "GO", extra_tag = "UP")
-  go_kegg_up_down(down, go_kegg_tag = "GO", extra_tag = "DOWN")
-  go_kegg_up_down(up, go_kegg_tag = "KEGG", extra_tag = "UP")
-  go_kegg_up_down(down, go_kegg_tag = "KEGG", extra_tag = "DOWN")
-}
+
+

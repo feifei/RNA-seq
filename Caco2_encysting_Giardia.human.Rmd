@@ -71,10 +71,21 @@ if(!file.exists(destfile)){
     attributes = c("ensembl_gene_id", "go_id"), 
     mart = human)
 
-  KEGGmap = getBM(
-    attributes = c("ensembl_gene_id", "kegg_enzyme"),
-    mart = human)
-  
+  library(org.Hs.egENSEMBL2EG)
+  library(org.Hs.egPATH)
+  # Get the mapping from ENSEMBL 2 Entrez
+  en2eg <- as.list(org.Hs.egENSEMBL2EG)
+  # Get the mapping from Entrez 2 KEGG
+  eg2kegg <- as.list(org.Hs.egPATH)
+  # Define a function which gets all unique KEGG IDs
+  # associated with a set of Entrez IDs
+  grepKEGG <- function(id,mapkeys){
+    unique(unlist(mapkeys[id],use.names=FALSE))
+  } 
+  # Apply this function to every entry in the mapping from
+  # ENSEMBL 2 Entrez to combine the two maps
+  KEGGmap <- lapply(en2eg, grepKEGG, eg2kegg)
+    
   save(genes, GOmap, KEGGmap, file=destfile)
 } else {
   load(destfile)
@@ -327,8 +338,7 @@ for (contrast in names(qlf_d) ) {
   export_DE(DE.genes.t, directory, name, cell, contrast)
   export_all(all.genes.t, directory, name, cell, contrast)
   export_cpm(DE.genes.t, directory, name, cell, contrast)
-  go_analysis(y, GOmap, isDE, dt, contrast)
-  go_kegg_analysis(y, isDE, directory, name, cell, contrast)
+  goseq_analysis()
 }
 colnames(logFC_mat) <- dimnames(my.contrasts)$Contrasts
 colnames(result_summary) <- dimnames(my.contrasts)$Contrasts
