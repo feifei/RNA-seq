@@ -51,6 +51,7 @@ The new *Giardia* WB genome was used. Human genome vGRCh38.p12 were downloaded f
 
 ```{r}
 name <- "giardia"
+cell <- "encysting"
 directory <- "data/"
 meta_file <- "data/metadata.tab"
 annotation_tab <- "data/wb_annotation.tab"
@@ -84,7 +85,7 @@ colnames(y$counts) <- group
 ```
 
 ## Gene annotation
-Add annotation to the DGEList. Genes that present in the databases but not in the released GTF fiels used for mapping, are either pseudogenes, or not included for some reasons that I don't know.
+Add annotation to the DGEList. Genes that present in the databases but not in the released GTF files used for mapping, are either pseudogenes, or not included for some reasons that I don't know.
 ```{r}
 annotation <- read.csv(file=annotation_tab, head=TRUE, sep="\t")
 sub_annotation <- annotation[match(rownames(y$counts), annotation$Geneid), ]
@@ -240,7 +241,7 @@ qlf_d <- qlf_dictionary(fit, my.contrasts)
 ```
 
 ```{r, results="asis", fig.show='asis', message=F, warning=F, fig.width=8}
-tag = "-BA"
+tag = ""
 result_summary <- matrix(, nrow=3, ncol=0) # DE number summary
 result_logFC1_summary <- matrix(, nrow=2, ncol=0) # DE with abs(logFC)>1 summary
 DT_mat <- matrix(, nrow=nrow(fit), ncol=0) # DE as 1, 0, -1
@@ -278,14 +279,20 @@ for (contrast in names(qlf_d) ) {
   plot_logFCvslogCPM(qlf, contrast)
   plot_pheatmap(qlf, summ, contrast)
   plot_valcano(all.genes.t, contrast)
-  export_DE(directory, name, DE.genes.t, contrast)
-  export_all(directory, name, all.genes.t, contrast)
-  export_cpm(directory, name, DE.genes.t, contrast)
-  # go_analysis(y, GOmap, isDE, dt, contrast)
+  export_DE(DE.genes.t, directory, name, cell, contrast)
+  export_all(all.genes.t, directory, name, cell, contrast)
+  export_cpm(DE.genes.t, directory, name, cell, contrast)
+  # goseq_analysis()
 }
 colnames(logFC_mat) <- dimnames(my.contrasts)$Contrasts
 colnames(result_summary) <- dimnames(my.contrasts)$Contrasts
 colnames(result_logFC1_summary) <- dimnames(my.contrasts)$Contrasts
+```
+
+```{r}
+# Save the matrix for combined analysis
+save(logFC_mat, DT_mat, 
+     file=paste("data/", name, ".", cell, ".logFC.rda", sep = ""))
 ```
 
 # Summary 

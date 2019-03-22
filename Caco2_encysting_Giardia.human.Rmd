@@ -347,9 +347,8 @@ colnames(result_logFC1_summary) <- dimnames(my.contrasts)$Contrasts
 
 ```{r}
 # Save the matrix for combined analysis
-human_encysting_logFC_mat <- logFC_mat
-human_encysting_DT_mat <- DT_mat
-save(human_encysting_logFC_mat, human_encysting_DT_mat, file="data/human.encysting.logFC.rda")
+save(logFC_mat, DT_mat, 
+     file=paste("data/", name, ".", cell, ".logFC.rda", sep = ""))
 ```
 
 # Summary 

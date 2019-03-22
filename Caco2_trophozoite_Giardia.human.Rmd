@@ -357,9 +357,8 @@ colnames(result_logFC1_summary) <- dimnames(my.contrasts)$Contrasts
 
 ```{r}
 # Save the matrix for the combined analysis
-human_trophozoite_logFC_mat <- logFC_mat
-human_trophozoite_DT_mat <- DT_mat
-save(human_trophozoite_logFC_mat, human_trophozoite_DT_mat, file="data/human.trophozoite.logFC.rda")
+save(logFC_mat, DT_mat, 
+     file=paste("data/", name, ".", cell, ".logFC.rda", sep = ""))
 ```
 
 # Summary 
