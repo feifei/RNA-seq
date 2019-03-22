@@ -355,6 +355,13 @@ colnames(result_summary) <- dimnames(my.contrasts)$Contrasts
 colnames(result_logFC1_summary) <- dimnames(my.contrasts)$Contrasts
 ```
 
+```{r}
+# Save the matrix for the combined analysis
+human_trophozoite_logFC_mat <- logFC_mat
+human_trophozoite_DT_mat <- DT_mat
+save(human_trophozoite_logFC_mat, human_trophozoite_DT_mat, file="data/human.trophozoite.logFC.rda")
+```
+
 # Summary 
 ## Summary of DE genes
 Genes that are DE are the ones with adjusted p-value (same as FDR in the table) less than a defined false discovery (FDR) rate. The adjusted p-value is used as opposed to the initial p-value as it has been adjusted for multiple testing. The FDR cutoff is set at 0.05. So genes with adjusted p-value < 0.05 is considered as DE, which were further classified into up- or down- regulated. Up-regulated genes has a positve log-fold change, while down-regulated genes has a negative log-fold change. DE with abs(logFC) > 1 was also show below.
@@ -410,3 +417,7 @@ pheatmap(head(logFC_mat[order(abs(logFC_mat$Infection_1.5vs0), decreasing=TRUE),
          show_rownames=FALSE, treeheight_row=0, treeheight_col=0,
          main=paste("Heatmap of logFC for the top", topX, " genes", tag))
 ```
+
+
+
+
