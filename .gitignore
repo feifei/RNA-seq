@@ -7,5 +7,6 @@
 *_files
 counts
 data
+plots
 *.Rproj
-*.DS_Store
+.DS_Store
