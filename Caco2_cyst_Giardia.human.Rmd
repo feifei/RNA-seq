@@ -1,0 +1,436 @@
+---
+title: "edgeR for DE analysis of Lauras Caco-2 cells interacting with Giardia cyst cells, Human part"
+author: "Feifei Xu"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+    df_print: paged
+    code_folding: hide
+    fig_width: 6
+    fig_height: 6
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, include=FALSE}
+library(edgeR)
+library(biomaRt)
+library(goseq)
+library(EDASeq)
+library(DT)
+library(RColorBrewer)
+library(colorspace)
+source("DE_fun.R")
+```
+
+
+# Background
+This report provides the analysis of RNA-Seq data from Caco-2 cells interacting with *Giardia* cyst cells, only the Caco2 cell (human) part. There is basically no *Giardia* reads since cysts were washed away, so no *Giardia* parts of analysis done.
+
+*Giardia* cells was growing in TYDK media, and high concentration of bile was added to the media to induce encystation. After 7h into encystation (no cysts yet), those *Giardia* cells were removed from TYDK media, and put into DMEM media (which is a human caco-2 cell media, and apparently *Giardia* cells do not grow happily in this media). *Giardia* cysts were add to human caco-2 cells sitting in DMEM media for 1.5h, 3.5h and 4.5h, and we want to see what happens in human cells during the interaction with cysts. Control is the human cell without cysts added. 3 replicates were obtained for each state.
+
+# Data prepartion
+The new *Giardia* WB genome was used. Human genome vGRCh38.p12 were downloaded from https://www.gencodegenes.org/releases/current.html (2018-07-31).`GRCh38.primary_assembly.genome.fa` and `gencode.v28.annotation.gtf`.
+
+`STAR` v020201 was used to map the concatenated reference genomes. Detailed command see `Laura/mapping2/star.sh`
+`htseq-count` which I used for the other projects generates mostly empty gene counts, so used `ReadsPerGene.out.tab` output from `STAR` with specifying `--quantMode GeneCounts`
+
+## Load data
+Specify annotation file, metadata file, ensemble genes, length infos, and the GO terms for the genes.
+
+
+```{r}
+# Get gene lengths and go annotation from biomart
+destfile <- 'data/genes_go_kegg.rda'
+if(!file.exists(destfile)){
+  human = useMart("ensembl", dataset="hsapiens_gene_ensembl") # hg38
+  genes <- getBM(
+    attributes=c('ensembl_gene_id', 'entrezgene', 'external_gene_name', 'chromosome_name', 'description'),
+    # filters="ensembl_gene_id", 
+    # values=genes,
+    mart = human)
+  
+  genes$description <- sapply(strsplit(genes$description, split=' [', fixed=TRUE), function(x) (x[1]))
+  
+  # Length is the sum of union of all exon intervals. EDASeq
+  gene_len <- getGeneLengthAndGCContent(genes$ensembl_gene_id, "hsa")
+  genes$length <- gene_len[, 'length'] 
+  
+  GOmap = getBM(
+    attributes = c("ensembl_gene_id", "go_id"), 
+    mart = human)
+
+  library(org.Hs.egENSEMBL2EG)
+  library(org.Hs.egPATH)
+  # Get the mapping from ENSEMBL 2 Entrez
+  en2eg <- as.list(org.Hs.egENSEMBL2EG)
+  # Get the mapping from Entrez 2 KEGG
+  eg2kegg <- as.list(org.Hs.egPATH)
+  # Define a function which gets all unique KEGG IDs
+  # associated with a set of Entrez IDs
+  grepKEGG <- function(id,mapkeys){
+    unique(unlist(mapkeys[id],use.names=FALSE))
+  } 
+  # Apply this function to every entry in the mapping from
+  # ENSEMBL 2 Entrez to combine the two maps
+  KEGGmap <- lapply(en2eg, grepKEGG, eg2kegg)
+    
+  save(genes, GOmap, KEGGmap, file=destfile)
+} else {
+  load(destfile)
+}
+```
+
+
+
+```{r}
+name <- "human"
+cell <- "cyst"
+directory <- "data/"
+meta_file <- "data/mapping_stats.cyst.txt"
+```
+
+## Data summary
+
+```{r}
+d <- read.table(meta_file, sep = "\t", header=T)
+
+condition <- c()
+batch <- c()
+hour <- c()
+for (x in sub("^TL-2800-Cac", "", d$prefix)) {
+  #print(i)
+  if (grepl("^ctrl", x) ) {
+    condition <- c(condition, "control")
+    hour <- c(hour, 0)
+  } else {
+    condition <- c(condition, "infection")
+    num <- substring(x, 1, 1)
+    if (num %in% c("3")) {
+      hour <- c(hour, num)
+    }else {
+      hour <- c(hour, paste0(num, '.5'))
+    }
+  }
+  if (nchar(x) == 1 | x == 'ctrl') {
+    batch <- c(batch,  1)
+  } else {
+    last_char <- substr(x, nchar(x) - 1 + 1, nchar(x))
+    batch <- c(batch, strtoi(last_char))
+  }
+}
+
+count_files <- paste(d$prefix, ".", name, ".counts", sep = "")
+d$count_files <- count_files
+
+group <- factor(paste(condition, hour, sep = "_"))
+d <- cbind(d, group = group, batch=batch, hour=hour, condition=condition)
+
+d <- d[with(d, order(hour, group)), ]
+
+datatable(d, options = list(scrollX = TRUE))
+```
+
+## Read counts distribution
+Plot the read counts distribution of the human vs *Giardia*.
+```{r, fig.height = 5, fig.width = 9}
+barplot(t(as.matrix(cbind(d$n_human_reads, d$n_giardia_reads))), 
+        col = c("blue", "green"), border = NA,
+        legend.text = c("Human", "Giardia"), args.legend = list(bty = "n", border = NA),
+        ylab = "Read counts", names.arg = d$group, las = 2, cex.names = 0.8)
+```
+
+## Build DGE
+Read and merge files containing gene expression counts.
+
+```{r}
+y <- readDGE(d$count_files, path = "counts_cyst", group = d$group, header = FALSE)
+colnames(y$counts) <- group
+# rownames, aka geneid has suffix which were trimmed, and duplciated entry with _PAR_Y were removed
+old_rownames <- rownames(y$counts)
+bad_row_idx <- grep("_PAR_Y", old_rownames)
+sub_rownames <- old_rownames[- bad_row_idx]
+new_rownames <- sapply(strsplit(sub_rownames, split = '.', fixed = TRUE), function(x) (x[1]))
+y$counts <- y$counts[- bad_row_idx, ]
+rownames(y$counts) <- new_rownames
+```
+
+## Gene annotation
+Add annotation to the DGEList. Genes that present in the databases but not in the released GTF fiels used for mapping, are either pseudogenes, or not included for some reasons that I don't know.
+```{r}
+nrow(genes)
+nrow(y$counts)
+y$genes <- genes[match(rownames(y$counts), genes$ensembl_gene_id), ]
+```
+
+## Data filtering
+Only genes with reasonable expression level should be included in the analysis. Keep genes with at least 2 counts per million in at least 2 samples (3 replicates, but one condition with only 2 replicates).
+
+There are lots of small RNAs in the very first list of genes, most unrelavant ones were filtered. Consider human genomes have around 20,000 genes, it's a good sign that we have this much keep after filtering.
+
+```{r}
+CPM <- cpm(y)
+summary(CPM)
+
+keep <- rowSums(CPM > 2) >= 2
+table(keep)
+y <- y[keep, , keep.lib.sizes = FALSE]
+```
+
+## Library sizes
+Plot number of reads matched per sample, and total for each gene across all samples. Library sizes varies from 15 to 50 millions.
+
+The gene which is way over expressed compared to the others is ENSG00000156508, eukaryotic translation elongation factor 1 alpha 1. In all the 10 genes which has more than 1 million reads in total, half of them are mitochondrially encoded. 
+
+```{r}
+counts_per_sample <- colSums(y$counts)
+names(counts_per_sample) <- d$group
+cols <- as.numeric(d$group) + 2
+barplot(counts_per_sample*1e-6, las = 2, main = "Counts per sample", 
+        col = cols, cex.names = 0.5, cex.axis = 0.8, 
+        ylab = "Library size (millions)")
+legend("topright", legend = c("Control", "Infected"), col=c(3,4), pch = 15)
+barplot(rowSums(y$counts)*1e-6, las = 2, main = "Counts per gene", 
+        axisnames = FALSE, cex.axis = 0.8, ylab = "Counts (millions)")
+
+y$genes[rowSums(y$counts) > 1e6, ]
+y$genes[which.max(rowSums(y$counts)), ]
+```
+## Normalization
+The raw library sizes were normalized with a scaling factor for each sample so that the log-fold changes between the samples for the majority of the genes are minimized. TMM is recommended for most RNA-Seq data where the majority (more than half) of the genes are believed to not be differentially expressed between any pair of the samples. Ideally all scaling factors should be around 1.
+
+We can see the normalization factors are all quite close to 1, indicating good library quality.
+
+```{r}
+logCPM_prenorm <- cpm(y, log = TRUE, prior.count = 2)
+median_prenorm <- rowMedians(logCPM_prenorm)
+
+y <- calcNormFactors(y)
+y$samples
+logCPM_postnorm <- cpm(y, log = TRUE, prior.count = 2)
+median_postnorm <- rowMedians(logCPM_postnorm)
+logCPM <- logCPM_postnorm
+
+```
+
+Below we can compare the different libraries before and after normalizations.
+Relative Log Expression (RLE) plot is a powerful tool for visualizaing unwanted variation in high dimensional data. Ideally all boxplots should be centered around 0 and be of similar width. Compare the boxplots before and after normaliztion, we can see that normalization did a good job. 
+
+
+```{r, fig.width=9, fig.height=6}
+group.col <- diverge_hcl(length(levels(group)))[factor(group)]
+boxplot(sweep(logCPM_prenorm, 1, median_prenorm, "-"), 
+        col = group.col, 
+        las = 2, main = "RLE plot pre-normalization")
+abline(h = 0, lty = 2)
+boxplot(sweep(logCPM_postnorm, 1, median_postnorm, "-"), 
+        col = group.col,
+        las = 2, main = "RLE plot post-normalization")
+abline(h = 0, lty = 2)
+```
+
+# Data exploration
+## Sample clustering
+The MDS plot shows the unsupervised clustering of the samples. It's a two-dimensional scatterplot that the distances on the plot approximate the typical log2-fold changes between the samples based the top 500 most variable genes between each pair of samples. On this plot, we can see that samples from the same conditions are not well grouped. But there seem to be clear batch effort seperated by dim2. Thus batch effect is adjusted in the next step.
+
+```{r}
+batch <- factor(d$batch)
+plotMDS(y, col = as.character(group.col), main = "colored after sample")
+plotMDS(y, labels = group,
+        col=diverge_hcl(length(levels(batch)))[factor(batch)], 
+        main="colored after batch")
+```
+
+## Sample clustering - Batch adjusted
+The samples were collected in 3 different batches (replicates). If we look at the sample clustering after removing this batch effect, samples from the same condition and time cluster more togther. The two controls do not cluster well, but at least are well sepearted from the infection interaction samples. This shows that the batch adjustment make sense. So we are continuing the DE analysis with batch adjusted data.
+
+```{r}
+design <- model.matrix(~0+group)
+colnames(design) <- levels(group)
+
+batch <- factor(d$batch)
+logCPM <- removeBatchEffect(logCPM, batch = batch, design = design)
+
+plotMDS(logCPM, labels = group,
+        col=diverge_hcl(length(levels(batch)))[factor(batch)], 
+        main="Batch adjusted, colored after batch")
+plotMDS(logCPM, labels = group,
+        col=diverge_hcl(length(levels(group)))[factor(group)], 
+        main="Batch adjusted, colored after samples")
+```
+
+## New model
+Include batch as the base of the new design (model).
+```{r}
+design <- model.matrix(~0 + batch + group)
+colnames(design)[4:6] <- levels(group)[2:4]
+```
+
+## Biological variation
+The square root of the common dispersion gives the coefficient of variation of biological variation (BCV). The BCV indicates how the abundance of each gene varies between replicate samples. The common BCV for the data set is small, which is good.
+```{r}
+y <- estimateDisp(y, design, robust=TRUE)
+y$common.dispersion
+```
+A plot of the averge $\log_2$CPM versus the BCV for each gene is shown below. The plot visualises how gene variation between replicate samples (BCV) changes as gene abundance ($\log_2$ counts per million) increase. We can see the trended dispersion shows a decreasing trend with expression level. Only the trended dispersion is used under the quasi-likelihood (QL) pipeline.
+```{r}
+plotBCV(y)
+```
+
+## Dispersion estimation
+The QL dispersions can be estimated using a genewise negative binomial generalized linear models with Quasi-likelihood test (glmQLFit), and then be visualized with the plotQLDisp function. The large number of cases and the high variability means that the QL dispersions are not squeezed very heavily from the raw values
+The data is transformed to $\log_2$CPM.
+
+```{r}
+fit <- glmQLFit(y, design, robust=TRUE)
+plotQLDisp(fit)
+```
+
+
+# Differential expression analysis
+QL F-test (glmQLFTest) were used to determine significant differential expression. The QL F-test is preferred as it reflects the uncertainty in estimating the dispersion for each gene. It also provides more robust and reliable error rate control when the number of replicates is small.
+
+## Contrasts
+Comparisons of interest listed below. Contrast defines the null hypothesis as the comparison intersted to be equal to zero.
+
+```{r}
+my.contrasts <- makeContrasts(
+  Infection_1.5vs0 = infection_1.5,
+  Infection_3vs0 = infection_3,
+  Infection_4.5vs0 = infection_4.5,
+  
+  Infection_3vs1.5 = infection_3 - infection_1.5,
+  Infection_4.5vs3 = infection_4.5 - infection_3,
+  
+  levels = design
+)
+colnames(my.contrasts)
+```
+
+```{r}
+# generate dictionary of contrast:qlf
+qlf_d <- qlf_dictionary(fit, my.contrasts)
+```
+
+```{r, results="asis", fig.show='asis', message=F, warning=F, fig.width=8}
+tag = ""
+result_summary <- matrix(, nrow=3, ncol=0) # DE number summary
+result_logFC1_summary <- matrix(, nrow=2, ncol=0) # DE with abs(logFC)>1 summary
+DT_mat <- matrix(, nrow=nrow(fit), ncol=0) # DE as 1, 0, -1
+logFC_mat <- matrix(, nrow = nrow(fit), ncol = 0) # logFC matrix for heatmap
+for (contrast in names(qlf_d) ) {
+  cat("##", contrast, "\n")
+  qlf <- qlf_d[[contrast]]
+  dt <- decideTestsDGE(qlf) # Decides DE with p.value <0.05, return matrix of 1, 0, -1
+  summ <- summary(dt)
+  row.names(summ) <- c("Down", "Not-sig", "Up")
+  result_summary <- cbind(result_summary, summ)
+  colnames(dt) <- contrast
+  DT_mat <- cbind(DT_mat, dt)
+  isDE <- as.logical(dt)
+  DEnames <- rownames(y)[isDE]
+  
+  all.genes <- topTags(qlf, n=Inf, sort.by="logFC") # Return a list containing a data.frame tabl
+  all.genes.t <- all.genes$table
+  all.genes.t.logFC <- all.genes[, 'logFC']$table
+   if (length(logFC_mat) == 0) {
+    logFC_mat <- all.genes.t.logFC
+  } else {
+    logFC_mat <- cbind(logFC_mat, 
+                       all.genes.t.logFC[match(rownames(logFC_mat), 
+                                               rownames(all.genes.t.logFC)), ])
+  }
+  DE.genes <- all.genes[DEnames,]
+  DE.genes.t <- DE.genes$table
+  DE.genes.t <- DE.genes.t[order(abs(DE.genes.t$logFC), decreasing=TRUE),]
+  logFC_summ <- matrix(c(nrow(DE.genes.t[DE.genes.t$logFC < -1,]),
+                      nrow(DE.genes.t[DE.genes.t$logFC > 1,])),
+                    nrow=2, ncol=1)
+  result_logFC1_summary <- cbind(result_logFC1_summary, logFC_summ)
+  
+  plot_logFCvslogCPM(qlf, contrast)
+  plot_pheatmap(qlf, summ, contrast)
+  plot_valcano(all.genes.t, contrast)
+  export_DE(DE.genes.t, directory, name, cell, contrast)
+  export_all(all.genes.t, directory, name, cell, contrast)
+  export_cpm(DE.genes.t, directory, name, cell, contrast)
+  goseq_analysis()
+}
+colnames(logFC_mat) <- dimnames(my.contrasts)$Contrasts
+colnames(result_summary) <- dimnames(my.contrasts)$Contrasts
+colnames(result_logFC1_summary) <- dimnames(my.contrasts)$Contrasts
+```
+
+```{r}
+# Save the matrix for combined analysis
+save(logFC_mat, DT_mat, 
+     file=paste("data/", name, ".", cell, ".logFC.rda", sep = ""))
+```
+
+# Summary 
+## Summary of DE genes
+Genes that are DE are the ones with adjusted p-value (same as FDR in the table) less than a defined false discovery (FDR) rate. The adjusted p-value is used as opposed to the initial p-value as it has been adjusted for multiple testing. The FDR cutoff is set at 0.05. So genes with adjusted p-value < 0.05 is considered as DE, which were further classified into up- or down- regulated. Up-regulated genes has a positve log-fold change, while down-regulated genes has a negative log-fold change. DE with abs(logFC) > 1 was also show below.
+
+```{r}
+rownames(result_logFC1_summary) <- c("Down.logFC<-1", "Up.logFC>1")
+merged_summary <- cbind(t(result_summary[-2,]), t(result_logFC1_summary))
+datatable(merged_summary)
+```
+
+
+## Venn Diagram
+Venn Diagram of the most interested comparisons with multiple DE. Note the numbers do not agree between both venn diagrams. The second diagram shows only those genes that were either up in both samples or down in both samples.
+The first diagram also includes genes that were up in one sample and down in the other, which is a less restrictive criterion. 
+And the total numbers in each contrast do add up the same.
+```{r, fig.width=8}
+DT_mat_interested <- DT_mat[, c("Infection_1.5vs0", 
+                                "Infection_3vs0",
+                                "Infection_4.5vs0")]
+vennDiagram(DT_mat_interested, cex = c(1, 1, 0.8), main = "Common/unique DE genes")
+vennDiagram(DT_mat_interested, cex = c(1, 1, 0.8), include = c("up", "down"), counts.col = c("red", 
+    "blue"), main = "Common/uniquly regulated genes")
+```
+
+```{r, fig.width=8}
+DT_mat_interested <- DT_mat[, c("Infection_1.5vs0", 
+                                "Infection_3vs1.5",
+                                "Infection_4.5vs3")]
+vennDiagram(DT_mat_interested, cex = c(1, 1, 0.8), main = "Common/unique DE genes")
+vennDiagram(DT_mat_interested, cex = c(1, 1, 0.8), include = c("up", "down"), counts.col = c("red", 
+    "blue"), main = "Common/uniquly regulated genes")
+```
+
+## Heatmap of the logFC 
+Heatmap of the logFC of the DE genes as well as heatmap of the top 500 genes.
+```{r}
+# subset logFC_mat to DE logFC_mat
+thr <- 5
+topX <- 500
+ncol_DT_mat <- ncol(DT_mat)
+DT_mat_DE <- DT_mat[apply(DT_mat, MARGIN=1, function(x) any(abs(x) == 1)), ]
+logFC_mat[logFC_mat < -thr] <- -thr
+logFC_mat[logFC_mat > thr] <- thr
+logFC_mat_sub <- logFC_mat[rownames(DT_mat_DE),]
+pheatmap(logFC_mat_sub,  
+         breaks=seq(from=-thr, to=thr, length=101), 
+         cluster_cols=FALSE,
+         show_rownames=FALSE, treeheight_row=0, treeheight_col=0,
+         main=paste("Heatmap of logFC for the DE genes", tag))
+pheatmap(head(logFC_mat[order(abs(logFC_mat$Infection_1.5vs0), decreasing=TRUE),], topX),  
+         breaks=seq(from=-thr, to=thr, length=101), 
+         cluster_cols=FALSE,
+         show_rownames=FALSE, treeheight_row=0, treeheight_col=0,
+         main=paste("Heatmap of logFC for the top", topX, " genes", tag))
+```
+
+
+
