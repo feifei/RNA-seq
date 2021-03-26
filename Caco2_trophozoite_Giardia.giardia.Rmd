@@ -24,7 +24,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r, include=FALSE}
 library(edgeR)
 library(biomaRt)
-library(goseq)
+#library(goseq)
 library(EDASeq)
 library(DT)
 library(RColorBrewer)
@@ -55,7 +55,7 @@ directory <- "data/"
 meta_file <- "data/metadata2.tab"
 cell <- "trophozoite"
 
-annotation_tab <- "data/wb_annotation.tab"
+annotation_tab <- "data/wb_annotation.pseudo0.tab"
 
 d <- read.csv(meta_file, sep = ",")
 d <- d[d[, "cell"] == cell, ]
@@ -108,7 +108,12 @@ keep <- rowSums(CPM > 2) >= 3
 table(keep)
 y <- y[keep, , keep.lib.sizes = FALSE]
 ```
-
+```{r}
+# Remove NAs
+keep <- !is.na(y$genes$Geneid)
+table(keep)
+y <- y[keep, , keep.lib.sizes = FALSE]
+```
 ## Library sizes
 Plot number of reads matched per sample, and total for each gene across all samples. Library sizes varies from 1 to 5 millions.
 
@@ -273,8 +278,8 @@ for (contrast in names(qlf_d) ) {
   DE.genes <- all.genes[DEnames,]
   DE.genes.t <- DE.genes$table
   DE.genes.t <- DE.genes.t[order(abs(DE.genes.t$logFC), decreasing=TRUE),]
-  logFC_summ <- matrix(c(nrow(DE.genes.t[DE.genes.t$logFC < -1,]),
-                      nrow(DE.genes.t[DE.genes.t$logFC > 1,])),
+  logFC_summ <- matrix(c(nrow(DE.genes.t[DE.genes.t$logFC <= -1,]),
+                      nrow(DE.genes.t[DE.genes.t$logFC >= 1,])),
                     nrow=2, ncol=1)
   result_logFC1_summary <- cbind(result_logFC1_summary, logFC_summ)
   
@@ -292,6 +297,13 @@ colnames(result_logFC1_summary) <- dimnames(my.contrasts)$Contrasts
 ```
 
 ```{r}
+cpm <- format(logCPM, digits=2, nsmall=1)
+write.csv(cpm, file=paste(directory, name, ".", cell, ".cpm", tag, ".csv", sep=""))
+
+```
+
+
+```{r}
 # Save the matrix for combined analysis
 save(logFC_mat, DT_mat, 
      file=paste("data/", name, ".", cell, ".logFC.rda", sep = ""))
@@ -302,7 +314,7 @@ save(logFC_mat, DT_mat,
 Genes that are DE are the ones with adjusted p-value (same as FDR in the table) less than a defined false discovery (FDR) rate. The adjusted p-value is used as opposed to the initial p-value as it has been adjusted for multiple testing. The FDR cutoff is set at 0.05. So genes with adjusted p-value < 0.05 is considered as DE, which were further classified into up- or down- regulated. Up-regulated genes has a positve log-fold change, while down-regulated genes has a negative log-fold change. DE with abs(logFC) > 1 was also show below.
 
 ```{r}
-rownames(result_logFC1_summary) <- c("Down.logFC<-1", "Up.logFC>1")
+rownames(result_logFC1_summary) <- c("Down.logFC <= -1", "Up.logFC >= 1")
 merged_summary <- cbind(t(result_summary[-2,]), t(result_logFC1_summary))
 datatable(merged_summary)
 ```
@@ -321,6 +333,35 @@ vennDiagram(DT_mat_interested, cex = c(1, 1, 0.8), include = c("up", "down"), co
     "blue"), main = "Common/uniquly regulated genes")
 ```
 
+```{r}
+# Export genes which are specific to the different time point
+logFC_mat_interested <- logFC_mat[, c("Infection_1.5vs0", 
+                                      "Infection_3vs0",
+                                      "Infection_4.5vs0")]
+
+DT_mat_interested <- data.frame(DT_mat_interested)
+DT_1.5vs_0_specific <- DT_mat_interested[abs(DT_mat_interested$Infection_1.5vs0) >= 1 & abs(DT_mat_interested$Infection_3vs0) < 1 & abs(DT_mat_interested$Infection_4.5vs0) < 1,]
+annotation_1.5vs0 <- sub_annotation[, -c(2)][sub_annotation$Geneid %in% rownames(DT_1.5vs_0_specific), ]
+logFC_mat_1.5vs0 <- logFC_mat_interested[rownames(logFC_mat_interested) %in% rownames(DT_1.5vs_0_specific), ]
+logFC_mat_1.5vs0$Geneid <- rownames(logFC_mat_1.5vs0)
+combined_1.5vs0 <- merge(annotation_1.5vs0, logFC_mat_1.5vs0, by.x = "Geneid", by.y = "Geneid")
+write.csv(combined_1.5vs0, file=paste(directory, name, ".", cell, ".1.5vs0", ".csv", sep=""), row.names = FALSE)
+
+DT_3vs_0_specific <- DT_mat_interested[abs(DT_mat_interested$Infection_3vs0) >= 1 & abs(DT_mat_interested$Infection_1.5vs0) < 1 & abs(DT_mat_interested$Infection_4.5vs0) < 1,] 
+annotation_3vs0 <- sub_annotation[, -c(2)][sub_annotation$Geneid %in% rownames(DT_3vs_0_specific), ]
+logFC_mat_3vs0 <- logFC_mat_interested[rownames(logFC_mat_interested) %in% rownames(DT_3vs_0_specific), ]
+logFC_mat_3vs0$Geneid <- rownames(logFC_mat_3vs0)
+combined_3vs0 <- merge(annotation_3vs0, logFC_mat_3vs0, by.x = "Geneid", by.y = "Geneid")
+write.csv(combined_3vs0, file=paste(directory, name, ".", cell, ".3vs0", ".csv", sep=""), row.names = FALSE)
+
+DT_4.5vs_0_specific <- DT_mat_interested[abs(DT_mat_interested$Infection_4.5vs0) >= 1 & abs(DT_mat_interested$Infection_1.5vs0) < 1 & abs(DT_mat_interested$Infection_3vs0) < 1,] 
+annotation_4.5vs0 <- sub_annotation[, -c(2)][sub_annotation$Geneid %in% rownames(DT_4.5vs_0_specific), ]
+logFC_mat_4.5vs0 <- logFC_mat_interested[rownames(logFC_mat_interested) %in% rownames(DT_4.5vs_0_specific), ]
+logFC_mat_4.5vs0$Geneid <- rownames(logFC_mat_4.5vs0)
+combined_4.5vs0 <- merge(annotation_4.5vs0, logFC_mat_4.5vs0, by.x = "Geneid", by.y = "Geneid")
+write.csv(combined_4.5vs0, file=paste(directory, name, ".", cell, ".4.5vs0", ".csv", sep=""), row.names = FALSE)
+```
+
 ```{r, fig.width=8}
 DT_mat_interested <- DT_mat[, c("Infection_1.5vs0", 
                                 "Infection_3vs1.5",
@@ -328,6 +369,28 @@ DT_mat_interested <- DT_mat[, c("Infection_1.5vs0",
 vennDiagram(DT_mat_interested, cex = c(1, 1, 0.8), main = "Common/unique DE genes")
 vennDiagram(DT_mat_interested, cex = c(1, 1, 0.8), include = c("up", "down"), counts.col = c("red", 
     "blue"), main = "Common/uniquly regulated genes")
+```
+
+
+
+Venn Diagram of the DE genes with abs(logFC) >= 1.
+
+```{r}
+# Take columns interested
+logFC_mat_interested <- logFC_mat[, c("Infection_1.5vs0", 
+                                      "Infection_3vs0",
+                                      "Infection_4.5vs0")]
+
+
+# Transfer logFC values to 1, -1, 0 for Venn Diagram
+logFC_mat_interested[logFC_mat_interested >= 1] <- 1
+logFC_mat_interested[logFC_mat_interested <= -1] <- -1
+logFC_mat_interested[logFC_mat_interested < 1  & logFC_mat_interested > -1] <- 0
+
+vennDiagram(logFC_mat_interested, cex = c(1, 1, 0.8), main = "Common/unique DE genes with abs(logFC)>=1")
+vennDiagram(logFC_mat_interested, cex = c(1, 1, 0.8), include = c("up", "down"), counts.col = c("red", 
+    "blue"), main = "Common/uniquly regulated genes with abs(logFC)>=1")
+
 ```
 
 

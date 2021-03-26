@@ -87,7 +87,7 @@ export_all <- function(all.genes.t, directory, name, cell, contrast, tag = "", .
             row.names = FALSE)
 }
 
-export_cpm <- function(DE.genes.t, directory, name, cell, contrast, tag = "", ...) {
+export_logcpm <- function(DE.genes.t, directory, name, cell, contrast, tag = "", ...) {
   cat("\n\n### Export logCPM values of the DE\n")
   cat("Inspect the depth-adjusted reads per million for the top differentially expressed. \n\n")
   
@@ -113,9 +113,23 @@ export_cpm <- function(DE.genes.t, directory, name, cell, contrast, tag = "", ..
   }
   
   DE.cpm <- format(DE.cpm, digits=2, nsmall=1)
-  write.csv(DE.cpm, file=paste(directory, name, ".", cell, ".", contrast, ".sig_results.cpm", tag, ".csv", sep=""))
+  write.csv(DE.cpm, file=paste(directory, name, ".", cell, ".", contrast, ".sig_results.logcpm", tag, ".csv", sep=""))
 }
 
+export_cpm <- function(DE.genes.t, directory, name, cell, contrast, tag = "", ...) {
+  cat("\n\n### Export logCPM values of the DE\n")
+  cat("Inspect the depth-adjusted reads per million for the top differentially expressed. \n\n")
+  
+  DE.cpm <- CPM[rownames(DE.genes.t),]
+  if (nrow(DE.genes.t) == 1) {
+    # numeric instead of matrix
+    DE.cpm <- matrix(DE.cpm, nrow=1)
+    colnames(DE.cpm) <- group
+  }  
+  
+  DE.cpm <- format(DE.cpm, digits=2, nsmall=1)
+  write.csv(DE.cpm, file=paste(directory, name, ".", cell, ".", contrast, ".sig_results.cpm", tag, ".csv", sep=""))
+}
 
 go_up_down <- function(genes, lengthData, GOmap, extra_tag = "UP", ...){
   cat(paste("\n\n### GO analysis with goseq - ", extra_tag, "\n", sep = ""))
