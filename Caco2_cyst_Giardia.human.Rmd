@@ -136,6 +136,7 @@ group <- factor(paste(condition, hour, sep = "_"))
 d <- cbind(d, group = group, batch=batch, hour=hour, condition=condition)
 
 d <- d[with(d, order(hour, group)), ]
+group <- d$group
 
 datatable(d, options = list(scrollX = TRUE))
 ```
@@ -154,7 +155,7 @@ Read and merge files containing gene expression counts.
 
 ```{r}
 y <- readDGE(d$count_files, path = "counts_cyst", group = d$group, header = FALSE)
-colnames(y$counts) <- group
+colnames(y$counts) <- d$group
 # rownames, aka geneid has suffix which were trimmed, and duplciated entry with _PAR_Y were removed
 old_rownames <- rownames(y$counts)
 bad_row_idx <- grep("_PAR_Y", old_rownames)
